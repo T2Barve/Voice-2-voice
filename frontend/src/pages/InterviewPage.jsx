@@ -56,19 +56,55 @@ const InterviewPage = () => {
         }
     }, [messages]);
 
+    const cleanTextForSpeech = (text) => {
+        return text
+            // Remove fenced code blocks entirely
+            .replace(/```[\s\S]*?```/g, ' [Code block] ')
+            // Remove inline code backticks
+            .replace(/`([^`]+)`/g, '$1')
+            // Remove LaTeX display math $$...$$
+            .replace(/\$\$[\s\S]*?\$\$/g, ' [Math expression] ')
+            // Remove LaTeX inline math $...$
+            .replace(/\$[^$\n]+\$/g, ' [Math expression] ')
+            // Replace common LaTeX commands with readable text
+            .replace(/\\times/g, ' times ')
+            .replace(/\\le\b/g, ' less than or equal to ')
+            .replace(/\\ge\b/g, ' greater than or equal to ')
+            .replace(/\\lt\b/g, ' less than ')
+            .replace(/\\gt\b/g, ' greater than ')
+            .replace(/\\cdot/g, ' dot ')
+            .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '$1 over $2')
+            .replace(/\\[a-zA-Z]+/g, ' ')   // remove remaining LaTeX commands
+            // Remove markdown bold/italic
+            .replace(/\*\*([^*]+)\*\*/g, '$1')
+            .replace(/\*([^*]+)\*/g, '$1')
+            .replace(/__([^_]+)__/g, '$1')
+            .replace(/_([^_]+)_/g, '$1')
+            // Remove markdown headers
+            .replace(/^#{1,6}\s+/gm, '')
+            // Remove remaining $ signs and backslashes
+            .replace(/\$/g, ' ')
+            .replace(/\\/g, ' ')
+            // Remove extra whitespace
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+    };
+
     const speakText = (text) => {
         if (!synthRef.current) return;
-        synthRef.current.cancel(); // Stop current speech
+        synthRef.current.cancel();
         
-        const cleanText = text.replace(/```[\s\S]*?```/g, " [Code Block Hidden] "); // Don't speak large code blocks
+        const cleanText = cleanTextForSpeech(text);
         
         const utterance = new SpeechSynthesisUtterance(cleanText);
-        utterance.rate = 1.0;
+        utterance.rate = 0.95;
         utterance.pitch = 1.0;
         
-        // Try to find a nice female English voice
+        // Try to find a natural English voice
         const voices = synthRef.current.getVoices();
-        const preferredVoice = voices.find(v => v.lang.includes('en') && v.name.includes('Google')) || voices[0];
+        const preferredVoice = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google'))
+            || voices.find(v => v.lang.startsWith('en'))
+            || voices[0];
         if (preferredVoice) utterance.voice = preferredVoice;
         
         synthRef.current.speak(utterance);
@@ -95,17 +131,40 @@ const InterviewPage = () => {
     const startInterview = async () => {
         setLoading(true);
         try {
-            const userId = localStorage.getItem('userId') || 'user_default';
+            let userObj = JSON.parse(localStorage.getItem('user') || '{}');
+
+            // Safety: if user object missing (e.g. old session), fetch from server
+            if (!userObj.id) {
+                try {
+                    const meRes = await fetch(`${EXPRESS_BACKEND}/api/auth/me`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
+                    if (meRes.ok) {
+                        userObj = await meRes.json();
+                        localStorage.setItem('user', JSON.stringify(userObj));
+                    }
+                } catch (_) { /* non-critical */ }
+            }
+
+            const userId = String(userObj.id || userObj._id || 'user_default');
             // We ensure we send Exactly what the FastAPI StartInterviewRequest expects
             const payload = {
-                user_id: userId,
-                session_id: sessionId,
-                company: company,
-                role: role,
+                user_id:        userId,
+                session_id:     sessionId,
+                company:        company,
+                role:           role,
                 interview_type: interviewType,
                 resume_data: {
-                    skills: resumeData.skills || [],
-                    projects: resumeData.projects || []
+                    // Flat fields required by all workflow states
+                    skills:     resumeData.skills     || [],
+                    projects:   resumeData.projects   || [],
+                    experience: resumeData.experience || 'Entry-level',
+                    // Rich fields used by technical + case-study for deep personalization
+                    projects_detail:  resumeData.projects_detail  || [],
+                    work_experience:  resumeData.work_experience  || [],
+                    education:        resumeData.education        || {},
+                    certifications:   resumeData.certifications   || [],
+                    key_achievements: resumeData.key_achievements || [],
                 }
             };
 
@@ -131,8 +190,8 @@ const InterviewPage = () => {
     };
 
     const submitAnswer = async () => {
-        if (!answer.trim() || loading) return;
         const userAns = answer.trim();
+        if (!userAns || loading) return;
         setAnswer('');
         setIsListening(false);
         recognitionRef.current?.stop();
@@ -152,6 +211,7 @@ const InterviewPage = () => {
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || data.error || 'Submit failed');
 
+            // Show feedback first (final_response), then next question separately
             if (data.final_response) {
                 setMessages(prev => [...prev, { role: 'interviewer', text: data.final_response }]);
             }
@@ -160,7 +220,10 @@ const InterviewPage = () => {
                 setFeedback({ score: data.score, strengths: data.strengths, weakness: data.weakness });
                 setPhase('ended');
             } else if (data.next_question) {
-                setMessages(prev => [...prev, { role: 'interviewer', text: data.next_question }]);
+                // Small delay so user can read feedback before next question appears
+                setTimeout(() => {
+                    setMessages(prev => [...prev, { role: 'interviewer', text: data.next_question }]);
+                }, 600);
             }
         } catch (err) {
             setMessages(prev => [...prev, { role: 'system', text: `❌ ${err.message}` }]);
@@ -200,20 +263,24 @@ const InterviewPage = () => {
         setCode(getLanguageDefaultValue(newLang));
     };
 
-    // Submitting code together with text for better context
+    // Unified submit: sends code + optional text comment for DSA, or just text for others
     const submitFullContext = async () => {
         const userAns = answer.trim();
-        const payloadText = interviewType === 'dsa' 
-            ? `[CODE SOLUTION IN ${language.toUpperCase()}]\n${code}\n\n[USER COMMENT]\n${userAns || "No comment provided."}`
+
+        // Validate: need text for non-DSA, and at least code or text for DSA
+        if (interviewType !== 'dsa' && !userAns) return;
+        if (interviewType === 'dsa' && !userAns && !code) return;
+        if (loading) return;
+
+        const payloadText = interviewType === 'dsa'
+            ? `[CODE SOLUTION IN ${language.toUpperCase()}]\n${code}\n\n[USER COMMENT]\n${userAns || 'No comment provided.'}`
             : userAns;
 
-        if (!payloadText && !code) return;
+        const displayText = interviewType === 'dsa'
+            ? (userAns ? `Submitted code. Comment: ${userAns}` : 'Submitted code solution.')
+            : userAns;
 
-        setMessages(prev => [...prev, { 
-            role: 'user', 
-            text: interviewType === 'dsa' ? (userAns ? `Modified code and said: ${userAns}` : "Updated code solution.") : userAns 
-        }]);
-        
+        setMessages(prev => [...prev, { role: 'user', text: displayText }]);
         setLoading(true);
         setAnswer('');
         setIsListening(false);
@@ -222,7 +289,7 @@ const InterviewPage = () => {
         try {
             const res = await fetch(`${EXPRESS_BACKEND}/api/${interviewType}/submit`, {
                 method: 'POST',
-                headers: { 
+                headers: {
                     'Content-Type': 'application/json',
                     ...(token && { Authorization: `Bearer ${token}` })
                 },
@@ -231,6 +298,7 @@ const InterviewPage = () => {
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || data.error || 'Submit failed');
 
+            // Show AI feedback first
             if (data.final_response) {
                 setMessages(prev => [...prev, { role: 'interviewer', text: data.final_response }]);
             }
@@ -239,7 +307,10 @@ const InterviewPage = () => {
                 setFeedback({ score: data.score, strengths: data.strengths, weakness: data.weakness });
                 setPhase('ended');
             } else if (data.next_question) {
-                setMessages(prev => [...prev, { role: 'interviewer', text: data.next_question }]);
+                // Brief pause so feedback is readable before next question appears
+                setTimeout(() => {
+                    setMessages(prev => [...prev, { role: 'interviewer', text: data.next_question }]);
+                }, 600);
             }
         } catch (err) {
             setMessages(prev => [...prev, { role: 'system', text: `❌ ${err.message}` }]);
@@ -328,6 +399,66 @@ const InterviewPage = () => {
         );
     }
 
+    // ── ENDED PHASE ─────────────────────────────────────────────────────────
+    if (phase === 'ended') {
+        const scoreNum = typeof feedback?.score === 'number' ? feedback.score : parseFloat(feedback?.score) || 0;
+        const scoreColor = scoreNum >= 8 ? 'text-emerald-400' : scoreNum >= 6 ? 'text-cyan-400' : 'text-amber-400';
+        const grade = scoreNum >= 8 ? 'Excellent' : scoreNum >= 6 ? 'Good' : 'Needs Practice';
+        return (
+            <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6 relative">
+                <div className="absolute inset-0 overflow-hidden pointer-events-none">
+                    <div className="absolute top-0 left-1/4 w-96 h-96 bg-emerald-500/10 rounded-full blur-[120px] animate-pulse" />
+                    <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '2s' }} />
+                </div>
+                <div className="relative z-10 max-w-2xl w-full space-y-6">
+                    <div className="text-center">
+                        <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-emerald-500 to-cyan-500 mb-4 shadow-[0_0_40px_rgba(16,185,129,0.3)]">
+                            <span className="text-3xl font-black text-black">AI</span>
+                        </div>
+                        <h1 className="text-4xl font-black tracking-tight">Interview Complete!</h1>
+                        <p className="text-gray-400 mt-2">{interviewType.toUpperCase()} Round · {company}</p>
+                    </div>
+                    <div className="bg-gray-900/60 border border-gray-800 rounded-3xl p-8 backdrop-blur-md text-center">
+                        <p className="text-gray-400 text-sm uppercase tracking-widest font-semibold mb-2">Your Score</p>
+                        <p className={`text-7xl font-black ${scoreColor}`}>{scoreNum.toFixed(1)}<span className="text-2xl text-gray-600">/10</span></p>
+                        <span className={`mt-3 inline-block px-4 py-1 rounded-full text-sm font-bold ${scoreNum >= 8 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : scoreNum >= 6 ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'}`}>
+                            {grade}
+                        </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-emerald-950/40 border border-emerald-800/40 rounded-2xl p-5">
+                            <h3 className="text-emerald-400 font-bold text-sm uppercase tracking-wider mb-3">Strengths</h3>
+                            <p className="text-gray-300 text-sm leading-relaxed">
+                                {Array.isArray(feedback?.strengths) ? feedback.strengths.join(' ') : (feedback?.strengths || 'Good effort overall!')}
+                            </p>
+                        </div>
+                        <div className="bg-amber-950/30 border border-amber-800/30 rounded-2xl p-5">
+                            <h3 className="text-amber-400 font-bold text-sm uppercase tracking-wider mb-3">Areas to Improve</h3>
+                            <p className="text-gray-300 text-sm leading-relaxed">
+                                {Array.isArray(feedback?.weakness) ? feedback.weakness.join(' ') : (feedback?.weakness || 'Keep practicing!')}
+                            </p>
+                        </div>
+                    </div>
+                    <div className="flex flex-col sm:flex-row gap-4">
+                        <button
+                            onClick={() => navigate('/dashboard')}
+                            className="flex-1 py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-black font-black text-lg rounded-2xl transition-all shadow-[0_0_30px_rgba(16,185,129,0.3)] hover:-translate-y-0.5"
+                        >
+                            View Dashboard
+                        </button>
+                        <button
+                            onClick={() => { setPhase('setup'); setMessages([]); setFeedback(null); }}
+                            className="flex-1 py-4 bg-gray-900 hover:bg-gray-800 border border-gray-700 text-white font-bold text-lg rounded-2xl transition-all"
+                        >
+                            Start New Round
+                        </button>
+                    </div>
+                    <p className="text-center text-gray-600 text-xs">Your report has been saved to your dashboard automatically.</p>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="h-screen bg-black text-white flex flex-col overflow-hidden">
             {/* Header */}
@@ -388,19 +519,25 @@ const InterviewPage = () => {
                             </div>
                         )}
                         {phase === 'ended' && feedback && (
-                            <div className="bg-emerald-500 border border-emerald-400 rounded-3xl p-8 mt-6 text-black">
-                                <h3 className="text-2xl font-black mb-6 flex items-center gap-2">
-                                    Round Over! <RotateCcw className="w-5 h-5" />
+                            <div className="bg-black/40 backdrop-blur-xl border border-emerald-500/20 rounded-3xl p-8 mt-6">
+                                <h3 className="text-2xl font-black mb-6 flex items-center gap-2 text-white">
+                                    Round Over! <RotateCcw className="w-5 h-5 text-emerald-400" />
                                 </h3>
                                 <div className="flex items-baseline gap-2 mb-8">
-                                    <span className="text-6xl font-black">{feedback.score}</span>
-                                    <span className="text-xl font-bold opacity-60">/10</span>
+                                    <span className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-400">{feedback.score}</span>
+                                    <span className="text-xl font-bold text-gray-500">/10</span>
                                 </div>
-                                <div className="space-y-4 mb-8">
-                                    <p className="font-bold flex gap-2"><CheckCircle2 className="w-5 h-5 shrink-0" /> {feedback.strengths}</p>
-                                    <p className="font-medium flex gap-2 opacity-80 underline decoration-black/20">📈 Needs focus on: {feedback.weakness}</p>
+                                <div className="space-y-4 mb-8 text-left">
+                                    <div className="bg-emerald-500/10 p-5 rounded-xl border border-emerald-500/20">
+                                        <p className="text-emerald-400 font-bold mb-2 flex items-center gap-2"><CheckCircle2 className="w-5 h-5" /> Your Approach & Strengths</p>
+                                        <p className="text-sm text-emerald-100/90 leading-relaxed whitespace-pre-wrap">{feedback.strengths}</p>
+                                    </div>
+                                    <div className="bg-cyan-500/10 p-5 rounded-xl border border-cyan-500/20">
+                                        <p className="text-cyan-400 font-bold mb-2 flex items-center gap-2">🎯 Expected Optimal Approach</p>
+                                        <p className="text-sm text-cyan-100/90 leading-relaxed whitespace-pre-wrap">{feedback.weakness}</p>
+                                    </div>
                                 </div>
-                                <button onClick={() => navigate('/dashboard')} className="w-full py-4 bg-black text-white rounded-2xl font-black text-lg transition-all hover:scale-[1.02] active:scale-95">Go to Dashboard</button>
+                                <button onClick={() => navigate('/dashboard')} className="w-full py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-white rounded-2xl font-black text-lg transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)]">Go to Dashboard</button>
                             </div>
                         )}
                         <div ref={scrollRef} />
@@ -413,28 +550,33 @@ const InterviewPage = () => {
                                 <textarea 
                                     value={answer} 
                                     onChange={e => setAnswer(e.target.value)} 
-                                    placeholder={isListening ? "Listening to your voice..." : "Type your answer or use voice..."} 
-                                    className={`w-full bg-white/[0.03] border ${isListening ? 'border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.1)]' : 'border-white/10'} rounded-3xl px-6 py-4 outline-none text-sm resize-none transition-all pr-32 placeholder:text-gray-600`} 
+                                    placeholder={loading ? 'AI is thinking...' : isListening ? 'Listening to your voice...' : 'Type your answer or use voice...'} 
+                                    className={`w-full bg-white/[0.03] border ${isListening ? 'border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.1)]' : 'border-white/10'} rounded-3xl px-6 py-4 outline-none text-sm resize-none transition-all pr-32 placeholder:text-gray-600 disabled:opacity-50`} 
                                     rows={2} 
+                                    disabled={loading}
                                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitFullContext(); }}} 
                                 />
                                 <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
                                     <button 
                                         onClick={toggleListen} 
-                                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${isListening ? 'bg-emerald-500 text-black animate-pulse' : 'hover:bg-white/10 text-gray-400'}`}
+                                        disabled={loading}
+                                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${isListening ? 'bg-emerald-500 text-black animate-pulse' : 'hover:bg-white/10 text-gray-400'} disabled:opacity-40`}
                                     >
                                         {isListening ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
                                     </button>
                                     <button 
                                         onClick={submitFullContext} 
-                                        disabled={!answer.trim() && (interviewType !== 'dsa' || !code)} 
+                                        disabled={loading || (interviewType !== 'dsa' && !answer.trim())}
                                         className="w-12 h-12 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black flex items-center justify-center disabled:opacity-20 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)]"
+                                        title="Submit answer"
                                     >
-                                        <Send className="w-5 h-5" />
+                                        {loading 
+                                            ? <span className="w-4 h-4 border-2 border-black/40 border-t-black rounded-full animate-spin" />
+                                            : <Send className="w-5 h-5" />}
                                     </button>
                                 </div>
                             </div>
-                            <p className="mt-3 text-[10px] text-gray-600 font-bold uppercase tracking-widest text-center">Press Enter to send context</p>
+                            <p className="mt-3 text-[10px] text-gray-600 font-bold uppercase tracking-widest text-center">Press Enter to submit</p>
                         </div>
                     )}
                 </div>
@@ -469,7 +611,7 @@ const InterviewPage = () => {
                                     onClick={submitFullContext}
                                     className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-black text-[10px] font-black uppercase tracking-widest rounded-lg transition-all"
                                 >
-                                    <Play className="w-3 h-3 fill-black" /> Run Solution
+                                    <Send className="w-3 h-3 fill-black" /> Submit Solution
                                 </button>
                             </div>
                         </div>

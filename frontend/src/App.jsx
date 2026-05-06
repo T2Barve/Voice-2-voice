@@ -6,6 +6,9 @@ import RoleSelectionPage from "./pages/RoleSelectionPage.jsx";
 import ResumeUploadPage from "./pages/ResumeUploadPage.jsx";
 import InterviewTypePage from "./pages/InterviewTypePage.jsx";
 import InterviewPage from "./pages/InterviewPage.jsx";
+import JobSearchPage from "./pages/JobSearchPage.jsx";
+import ResumeAnalysisPage from "./pages/ResumeAnalysisPage.jsx";
+import RoasterUploadPage from "./pages/RoasterUploadPage.jsx";
 import FlowGuard from "./components/FlowGuard.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
 
@@ -43,6 +46,20 @@ function App() {
               <InterviewPage />
             </FlowGuard>
           } />
+          
+          <Route path="/resume-roaster" element={
+            <FlowGuard requiredStep="role">
+              <RoasterUploadPage />
+            </FlowGuard>
+          } />
+
+          <Route path="/roaster-results" element={
+            <FlowGuard requiredStep="role">
+              <ResumeAnalysisPage />
+            </FlowGuard>
+          } />
+          
+          <Route path="/job-search" element={<JobSearchPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

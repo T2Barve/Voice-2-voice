@@ -3,12 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
 import uvicorn
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Import workflows
 from backend.workflows.technical_workflow import workflow as technical_workflow
 from backend.workflows.dsa_workflow import workflow as dsa_workflow
 from backend.workflows.case_study_workflow import workflow as case_study_workflow
-from backend.services.resume_service import process_resume
+from backend.services.resume_service import process_resume, analyze_resume_for_roast
 from backend.services.analytics_service import get_dashboard_metrics
 
 app = FastAPI(title="AI Interview Platform API")
@@ -26,9 +29,18 @@ app.add_middleware(
 # ---------------------------------------------
 
 class ResumeData(BaseModel):
-    """Parsed resume context passed from frontend localStorage."""
-    skills: List[str] = []
-    projects: List[str] = []
+    """Full rich resume context passed from frontend localStorage."""
+    # Flat fields (backward compat — used by all 3 workflows)
+    skills:     List[str] = []
+    projects:   List[str] = []
+    experience: str = "Entry-level"
+
+    # Rich fields (used by technical + case-study for deep personalization)
+    projects_detail:  List[dict] = []
+    work_experience:  List[dict] = []
+    education:        dict = {}
+    certifications:   List[str] = []
+    key_achievements: List[str] = []
 
 class StartInterviewRequest(BaseModel):
     user_id: str
@@ -61,22 +73,31 @@ class SubmitAnswerResponse(BaseModel):
 
 def _build_base_state(request: StartInterviewRequest) -> dict:
     """Build the initial workflow state for the deterministic engine."""
+    rd = request.resume_data
     return {
-        "session_id": request.session_id,
-        "user_id": request.user_id,
-        "role": request.role,
-        "company": request.company,
+        "session_id":    request.session_id,
+        "user_id":       request.user_id,
+        "role":          request.role,
+        "company":       request.company,
         "interview_type": request.interview_type,
         "resume_data": {
-            "skills": request.resume_data.skills,
-            "projects": request.resume_data.projects
+            # Flat fields
+            "skills":     rd.skills,
+            "projects":   rd.projects,
+            "experience": rd.experience,
+            # Rich fields
+            "projects_detail":  rd.projects_detail,
+            "work_experience":  rd.work_experience,
+            "education":        rd.education,
+            "certifications":   rd.certifications,
+            "key_achievements": rd.key_achievements,
         },
-        "question_index": 0,
-        "questions_asked": [],
+        "question_index":   0,
+        "questions_asked":  [],
         "resume_questions": [],
-        "rag_questions": [],
-        "answers": [],
-        "scores": [],
+        "rag_questions":    [],
+        "answers":          [],
+        "scores":           [],
         "interview_status": "ongoing"
     }
 
@@ -94,7 +115,14 @@ async def handle_start(request: StartInterviewRequest, workflow_instance, interr
 
         return StartInterviewResponse(question=question, status="waiting_for_answer")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        err_str = str(e)
+        if "RESOURCE_EXHAUSTED" in err_str or "429" in err_str or "quota" in err_str.lower():
+            raise HTTPException(
+                status_code=429,
+                detail="Gemini API daily quota exceeded. You are on the free tier (20 req/day). "
+                       "Please wait ~24 hours or upgrade to a paid Gemini API key."
+            )
+        raise HTTPException(status_code=500, detail=err_str)
 
 async def handle_submit(request: SubmitAnswerRequest, workflow_instance, interview_type: str, interrupt_node: str = "ask_human"):
     try:
@@ -122,18 +150,31 @@ async def handle_submit(request: SubmitAnswerRequest, workflow_instance, intervi
         is_ended = not final_state.next if final_state else True
         status = "ended" if is_ended else "continue"
 
+        # DSA workflow: final_response IS the next message (feedback+question combined in one field)
+        # Technical/Case-Study: generate_question() clears final_response to '', so:
+        #   final_response = feedback only (from evaluate_answer)
+        #   interview_question = the new question (from generate_question)
+        # These are mutually exclusive for technical/case-study — prevents double display.
+        feedback = st.get("final_response", "")
+        interview_q = st.get("interview_question", "")
+
+        # For DSA, final_response == interview_question (both set to same msg), so don't send next_question
+        # For technical/case-study, they differ, so send both
+        is_dsa = interview_type.upper() == "DSA"
+        if is_dsa:
+            next_q = None  # frontend reads everything from final_response
+        else:
+            # Only send next_question if it differs from feedback (avoid double display)
+            next_q = interview_q if (status == "continue" and interview_q and interview_q != feedback) else None
+
         resp = SubmitAnswerResponse(
             score=st.get("score", 0),
             strengths=st.get("strengths", ""),
             weakness=st.get("weakness", ""),
-            final_response=st.get("final_response", ""),
+            final_response=feedback,
+            next_question=next_q,
             status=status,
         )
-
-        if status == "continue":
-            q = st.get("interview_question", "")
-            if q:
-                resp.next_question = q
 
         return resp
 
@@ -160,6 +201,21 @@ async def upload_resume(file: UploadFile = File(...)):
     except Exception as e:
         print(f"Resume Upload Error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to parse resume: {str(e)}")
+
+class AnalyzeResumeRequest(BaseModel):
+    resume_text: str
+
+@app.post("/api/resume/analyze")
+async def analyze_resume_endpoint(request: AnalyzeResumeRequest):
+    """Resume Roaster + ATS Scorer endpoint."""
+    try:
+        analysis = analyze_resume_for_roast(request.resume_text)
+        return {
+            "status": "success",
+            "data": analysis
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analytics")
 async def get_analytics():
@@ -189,11 +245,11 @@ async def submit_tech(request: SubmitAnswerRequest):
 # Case Study Interviews
 @app.post("/api/case-study/start", response_model=StartInterviewResponse)
 async def start_cs(request: StartInterviewRequest):
-    return await handle_start(request, case_study_workflow, interrupt_node="ask")
+    return await handle_start(request, case_study_workflow, interrupt_node="ask_human")
 
 @app.post("/api/case-study/submit", response_model=SubmitAnswerResponse)
 async def submit_cs(request: SubmitAnswerRequest):
-    return await handle_submit(request, case_study_workflow, "Case Study", interrupt_node="ask")
+    return await handle_submit(request, case_study_workflow, "Case Study", interrupt_node="ask_human")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

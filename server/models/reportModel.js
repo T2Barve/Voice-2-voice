@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const questionSchema = new mongoose.Schema({
   question: String,
   source: String,     // 'resume' | 'rag'
-  answer: String,     // Flattened from userAnswer
+  answer: String,
   score: Number,
   feedback: {
     strengths: [String],
@@ -11,53 +11,48 @@ const questionSchema = new mongoose.Schema({
   }
 });
 
-const skillSchema = new mongoose.Schema({
-  dsa: Number,
-  communication: Number,
-  problem_solving: Number,
-  system_design: Number,
-  core_cs: Number
-});
-
 const reportSchema = new mongoose.Schema({
   session_id: {
     type: String,
     required: true,
-    unique: false  // Changed to false for better resilience in dev retries
+    unique: false
   },
 
   user_id: {
     type: String,
-    required: true
+    required: true,
+    index: true
   },
 
-  company: String,
-  role: String,
-  interview_type: String,
+  company:        { type: String, default: 'Unknown' },
+  role:           { type: String, default: 'SDE' },
+  interview_type: { type: String, default: 'technical' },  // 'dsa' | 'technical' | 'case_study'
 
-  total_score: Number,
+  // Unified score field — all workflows must send this
+  score: { type: Number, default: 0 },
+
   breakdown: {
-    resume_based: Number,
-    company_based: Number
+    resume_based:  { type: Number, default: 0 },
+    company_based: { type: Number, default: 0 }
   },
 
-  strengths: [String],
+  strengths:  [String],
   weaknesses: [String],
 
   questions: [questionSchema],
 
   resume_summary: {
-    skills: [String],
-    projects: [String],
+    skills:     [String],
+    projects:   [String],
     experience: String
   },
 
   metadata: {
-    total_questions: Number,
+    total_questions:  Number,
     duration_seconds: Number,
     difficulty_level: String,
-    started_at: Date,
-    completed_at: Date
+    started_at:       Date,
+    completed_at:     Date
   },
 
   createdAt: {

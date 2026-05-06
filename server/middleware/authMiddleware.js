@@ -3,6 +3,11 @@ import jwt from 'jsonwebtoken';
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key_change_in_production';
 
 const authMiddleware = (req, res, next) => {
+    // Internal secret bypass for backend-to-backend communication
+    if (req.headers['x-internal-secret'] === 'interview_ai_internal_secret_2026') {
+        return next();
+    }
+
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Access denied. No token provided.' });

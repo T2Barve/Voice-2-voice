@@ -43,10 +43,17 @@ const ResumeUploadPage = () => {
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || data.error || 'Upload failed');
 
-            // Set data into local storage exactly as user required
             const resumeContext = {
-                skills: data.data?.skills || [],
-                projects: data.data?.projects || []
+                skills:   data.data?.skills   || [],
+                projects: data.data?.projects || [],
+                experience: data.data?.experience || 'Entry-level',
+                role:     data.data?.role || 'Software Engineer',
+                projects_detail:  data.data?.projects_detail  || [],
+                work_experience:  data.data?.work_experience  || [],
+                education:        data.data?.education        || {},
+                certifications:   data.data?.certifications   || [],
+                key_achievements: data.data?.key_achievements || [],
+                _warning:         data.data?._warning         || '',
             };
             localStorage.setItem('resumeData', JSON.stringify(resumeContext));
             localStorage.setItem('resumeUploaded', 'true');
@@ -148,6 +155,14 @@ const ResumeUploadPage = () => {
                             <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center text-white font-bold">✓</div>
                             <h2 className="text-xl font-bold text-emerald-400">Resume Parsed Successfully!</h2>
                         </div>
+
+                        {/* Warning banner when AI fallback was used */}
+                        {parsedData?._warning && (
+                            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl px-4 py-3 text-amber-300 text-sm">
+                                <span className="font-semibold">Warning: </span>{parsedData._warning}
+                                <p className="mt-1 text-amber-400/70 text-xs">Interview will proceed with generic skills. Re-upload tomorrow for personalized questions.</p>
+                            </div>
+                        )}
 
                         <div className="space-y-4">
                             <div className="bg-black/40 rounded-xl p-4 border border-gray-800">

@@ -24,8 +24,14 @@ export const signup = async (req, res) => {
                 return res.status(500).json({ error: 'Database error' });
             }
 
-            const token = jwt.sign({ id: this.lastID, email }, JWT_SECRET, { expiresIn: '7d' });
-            res.status(201).json({ message: 'User created successfully', token });
+            const newId = this.lastID;
+            const token = jwt.sign({ id: newId, email }, JWT_SECRET, { expiresIn: '7d' });
+            // Return user object (same as login) so frontend can store it in localStorage
+            res.status(201).json({
+                message: 'User created successfully',
+                token,
+                user: { id: newId, name, email }
+            });
         });
     } catch (error) {
         res.status(500).json({ error: 'Server error' });

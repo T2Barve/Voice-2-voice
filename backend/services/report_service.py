@@ -2,7 +2,7 @@ import json
 from langchain_google_genai import ChatGoogleGenerativeAI
 from backend.db.database import save_report
 
-model = ChatGoogleGenerativeAI(model='models/gemini-2.5-flash')
+model = ChatGoogleGenerativeAI(model='gemini-flash-latest', temperature=0.3)
 
 def generate_interview_report(session_id: str, state_values: dict, interview_type: str):
     """
@@ -27,7 +27,10 @@ Generate a final strict JSON report containing ONLY this structure, no markdown 
 }}"""
 
     response = model.invoke(prompt)
-    json_str = response.content.strip()
+    content = response.content
+    if isinstance(content, list):
+        content = "".join([part.get("text", "") if isinstance(part, dict) else str(part) for part in content])
+    json_str = content.strip()
     
     # Clean up MD formatting if it leaked
     if json_str.startswith("```json"):

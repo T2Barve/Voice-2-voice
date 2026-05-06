@@ -17,7 +17,7 @@ def get_embeddings():
     # Fallback to HuggingFace Embeddings if requested, but Google's are often preferred unless specified.
     # The prompt listed "HuggingFaceEmbeddings or Gemini". I'll stick to Gemini to reduce heavy local dependencies if possible,
     # but the prompt specifically mentioned "HuggingFaceEmbeddings" in one place. Let's use Gemini since google-genai is already set up.
-    return GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    return GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
 
 def load_documents(company: str, interview_type: str):
     company = company.lower().replace(" ", "_")

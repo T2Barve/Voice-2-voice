@@ -5,6 +5,7 @@ import reportRoutes from './routes/reportRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import resumeRoutes from './routes/resumeRoutes.js';
+import jobRoutes from './routes/jobRoutes.js';
 import authMiddleware from './middleware/authMiddleware.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
@@ -29,6 +30,7 @@ app.use('/api/case-study', authMiddleware, interviewRoutes);
 
 app.use('/api/report', authMiddleware, reportRoutes);
 app.use('/api/analytics', authMiddleware, analyticsRoutes);
+app.use('/api/jobs', authMiddleware, jobRoutes);
 
 // Error Middleware
 app.use(errorHandler);
