@@ -81,4 +81,5 @@ npm run dev
 ```
 
 ## 📜 License
-MIT License. Created with ❤️ by Mayur Laddha.
+MIT License. Created with ❤️ by Mayur Laddha & Tanishq Barve
+
